@@ -46,7 +46,7 @@ async function decideForDossier(dossier) {
     evidence: Array.isArray(llmResult.evidence) ? llmResult.evidence.slice(0, 5) : [],
     rationale: typeof llmResult.rationale === 'string' ? llmResult.rationale.slice(0, 400) : '',
   };
-  proposal.proposalDigest = sha256Hex(canonicalStringify(proposal));
+  proposal.inputDigest = sha256Hex(canonicalStringify(dossier));
 
   db.putDecision(contentHash, dossier.dossierId, callId, proposal);
   return { callId, proposal };
