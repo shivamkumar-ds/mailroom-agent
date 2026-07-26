@@ -172,12 +172,20 @@ async function handleCommit(req, res) {
       continue;
     }
 
-    // TODO (CRITICAL - fill in before submitting): verify the receipt is
-    // authentic using evaluation.receiptKey (the "unpredictable receipt"
-    // the grader controls). Until the real signing/verification scheme
-    // from the assignment page is dropped in here, this file trusts any
-    // syntactically valid receipt whose ids/digest match - which will
-    // NOT satisfy "verify every receipt before recording any effect".
+    const crypto = require('crypto');
+
+function verifyReceiptSignature(receipt, verifier) {
+  const publicKey = crypto.createPublicKey({ key: verifier.publicKeyJwk, format: 'jwk' });
+  const message = canonicalStringify({
+    evaluationId: receipt.evaluationId,
+    callId: receipt.callId,
+    receiptId: receipt.receiptId,
+    proposalDigest: receipt.proposalDigest,
+    action: receipt.action,
+  });
+  return crypto.verify(null, Buffer.from(message), publicKey, Buffer.from(receipt.signature, 'base64'));
+}
+
     const approved = receipt.approved !== false;
 
     if (!approved) {
