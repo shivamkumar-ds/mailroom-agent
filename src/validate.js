@@ -1,19 +1,24 @@
 const { z } = require('zod');
 
-// A dossier must at least have a stable id; everything else is
-// arbitrary case content (subject/body/sender/attachments/etc.),
-// so we use passthrough() rather than a rigid shape.
+// CONFIRMED from the grader's actual propose payload: a dossier's stable
+// identifier field is `dossierId`, not `id`. Other fields (partition,
+// receivedAt, mailbox, objective, sources[]) vary by case, so we keep
+// passthrough() and don't hard-require them.
 const DossierSchema = z
   .object({
-    id: z.string().min(1),
+    dossierId: z.string().min(1),
   })
   .passthrough();
 
-const ProposeRequestSchema = z.object({
-  operation: z.literal('propose'),
-  evaluationId: z.string().min(1),
-  dossiers: z.array(DossierSchema).min(1),
-});
+// CONFIRMED envelope fields from the real grader payload:
+// { profile, operation, evaluationId, receiptVerifier, corpus, allowedActions, dossiers }
+const ProposeRequestSchema = z
+  .object({
+    operation: z.literal('propose'),
+    evaluationId: z.string().min(1),
+    dossiers: z.array(DossierSchema).min(1),
+  })
+  .passthrough();
 
 // ASSUMPTION: the exact receipt shape from the grader is not in the
 // excerpt you pasted. This accepts evaluationId + callId + receiptId
