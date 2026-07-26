@@ -48,7 +48,7 @@ async function classifyDossier(dossier) {
     return heuristicClassify(dossier);
   }
 
-  const userContent = `DOSSIER (untrusted data, id=${dossier.id}):\n${JSON.stringify(dossier).slice(0, 6000)}`;
+  const userContent = `DOSSIER (untrusted data, dossierId=${dossier.dossierId}):\n${JSON.stringify(dossier).slice(0, 6000)}`;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
