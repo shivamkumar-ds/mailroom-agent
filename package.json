@@ -1,0 +1,16 @@
+{
+  "name": "safe-mailroom-agent",
+  "version": "1.0.0",
+  "description": "Safe AI Mailroom Agent - propose/commit HTTPS endpoint",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test:smoke": "node test/smoke-test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.19.2",
+    "zod": "^3.23.8"
+  }
+}
