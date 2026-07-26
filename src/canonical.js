@@ -26,16 +26,15 @@ function sha256Hex(str) {
 }
 
 // Fingerprint of ONE dossier's content. Used as the cache key so that
-// identical dossiers (same id + same content) across different
+// identical dossiers (same dossierId + same content) across different
 // evaluationIds/Checks never trigger a second model call.
 //
-// ASSUMPTION: a dossier looks like { id: "...", ...contentFields }.
-// If the real payload nests content under a different key (e.g.
-// dossier.content / dossier.record), adjust the `material` object below.
+// CONFIRMED from the grader's actual propose payload: a dossier looks like
+// { dossierId, partition, receivedAt, mailbox, objective, sources: [...] }.
 function contentFingerprint(dossier) {
   const material = {
-    id: dossier.id,
-    content: dossier.content !== undefined ? dossier.content : dossier,
+    dossierId: dossier.dossierId,
+    content: dossier,
   };
   return sha256Hex(canonicalStringify(material));
 }
