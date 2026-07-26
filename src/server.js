@@ -18,33 +18,16 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
 function jsonError(res, status, message, details) {
   return res.status(status).type('application/json').json({ status: 'error', error: message, details });
 }
 
 // ---------------- decision cache (keyed by dossier content, not evaluationId) ----------------
 
-function getCachedDecision(contentHash) {
-  const row = db.prepare('SELECT * FROM decisions WHERE content_hash = ?').get(contentHash);
-  if (!row) return null;
-  return { callId: row.call_id, proposal: JSON.parse(row.proposal_json) };
-}
-
-function storeCachedDecision(contentHash, dossierId, callId, proposal) {
-  db.prepare(
-    `INSERT OR IGNORE INTO decisions (content_hash, dossier_id, call_id, proposal_json, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(contentHash, dossierId, callId, JSON.stringify(proposal), nowIso());
-}
-
 async function decideForDossier(dossier) {
   const contentHash = contentFingerprint(dossier);
-  const cached = getCachedDecision(contentHash);
-  if (cached) return cached;
+  const cached = db.getDecision(contentHash);
+  if (cached) return { callId: cached.callId, proposal: cached.proposal };
 
   const callId = callIdFromFingerprint(contentHash);
   const llmResult = await withTimeout(classifyDossier(dossier), MODEL_TIMEOUT_MS);
@@ -65,54 +48,15 @@ async function decideForDossier(dossier) {
   };
   proposal.proposalDigest = sha256Hex(canonicalStringify(proposal));
 
-  storeCachedDecision(contentHash, dossier.id, callId, proposal);
+  db.putDecision(contentHash, dossier.id, callId, proposal);
   return { callId, proposal };
 }
 
-// ---------------- evaluation state ----------------
+// ---------------- evaluation helpers ----------------
 
 function fingerprintDossierSet(dossiers) {
   const hashes = dossiers.map((d) => contentFingerprint(d)).sort();
   return sha256Hex(canonicalStringify(hashes));
-}
-
-function getEvaluation(evaluationId) {
-  const row = db.prepare('SELECT * FROM evaluations WHERE evaluation_id = ?').get(evaluationId);
-  if (!row) return null;
-  return {
-    evaluationId: row.evaluation_id,
-    dossierFingerprint: row.dossier_fingerprint,
-    proposals: JSON.parse(row.proposals_json),
-    receiptKey: row.receipt_key,
-    status: row.status,
-  };
-}
-
-function storeEvaluation(evaluationId, dossierFingerprint, proposals, receiptKey, status) {
-  db.prepare(
-    `INSERT INTO evaluations (evaluation_id, dossier_fingerprint, proposals_json, receipt_key, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(evaluation_id) DO UPDATE SET
-       dossier_fingerprint = excluded.dossier_fingerprint,
-       proposals_json = excluded.proposals_json,
-       receipt_key = excluded.receipt_key,
-       status = excluded.status`
-  ).run(evaluationId, dossierFingerprint, JSON.stringify(proposals), receiptKey, status, nowIso());
-}
-
-// ---------------- receipts ----------------
-
-function getStoredReceipt(receiptId) {
-  const row = db.prepare('SELECT * FROM receipts WHERE receipt_id = ?').get(receiptId);
-  if (!row) return null;
-  return { ...row, outcome: JSON.parse(row.outcome_json) };
-}
-
-function storeReceipt(receiptId, evaluationId, callId, outcome, effectExecuted) {
-  db.prepare(
-    `INSERT OR IGNORE INTO receipts (receipt_id, evaluation_id, call_id, outcome_json, effect_executed, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(receiptId, evaluationId, callId, JSON.stringify(outcome), effectExecuted ? 1 : 0, nowIso());
 }
 
 // ---------------- endpoint ----------------
@@ -141,7 +85,7 @@ async function handlePropose(req, res) {
   }
 
   const dossierFingerprint = fingerprintDossierSet(dossiers);
-  const existing = getEvaluation(evaluationId);
+  const existing = db.getEvaluation(evaluationId);
 
   if (existing) {
     if (existing.dossierFingerprint !== dossierFingerprint) {
@@ -164,7 +108,7 @@ async function handlePropose(req, res) {
     // ASSUMPTION: storing an optional receipt-verification key the grader
     // may send alongside the propose request (e.g. body.receiptVerificationKey).
     // Confirm the real field name once you have the exact request example.
-    storeEvaluation(evaluationId, dossierFingerprint, proposals, req.body.receiptVerificationKey || null, 'awaiting_receipts');
+    db.putEvaluation(evaluationId, dossierFingerprint, proposals, req.body.receiptVerificationKey || null, 'awaiting_receipts');
 
     return res.status(200).type('application/json').json({
       status: 'awaiting_receipts',
@@ -186,17 +130,17 @@ async function handleCommit(req, res) {
   const outcomes = [];
 
   for (const receipt of receipts) {
-    const existingReceipt = getStoredReceipt(receipt.receiptId);
+    const existingReceipt = db.getReceipt(receipt.receiptId);
     if (existingReceipt) {
       // exact replay: never repeat the tool effect
       outcomes.push(existingReceipt.outcome);
       continue;
     }
 
-    const evaluation = getEvaluation(receipt.evaluationId);
+    const evaluation = db.getEvaluation(receipt.evaluationId);
     if (!evaluation) {
       const outcome = { receiptId: receipt.receiptId, status: 'rejected', reason: 'unknown evaluationId' };
-      storeReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
+      db.putReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
       outcomes.push(outcome);
       continue;
     }
@@ -204,21 +148,21 @@ async function handleCommit(req, res) {
     const proposal = evaluation.proposals.find((p) => p.callId === receipt.callId);
     if (!proposal) {
       const outcome = { receiptId: receipt.receiptId, status: 'rejected', reason: 'unknown callId for this evaluation' };
-      storeReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
+      db.putReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
       outcomes.push(outcome);
       continue;
     }
 
     if (receipt.proposalDigest && receipt.proposalDigest !== proposal.proposalDigest) {
       const outcome = { receiptId: receipt.receiptId, status: 'rejected', reason: 'proposal digest mismatch' };
-      storeReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
+      db.putReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
       outcomes.push(outcome);
       continue;
     }
 
     if (receipt.action && receipt.action !== proposal.action) {
       const outcome = { receiptId: receipt.receiptId, status: 'rejected', reason: 'action mismatch' };
-      storeReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
+      db.putReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
       outcomes.push(outcome);
       continue;
     }
@@ -233,7 +177,7 @@ async function handleCommit(req, res) {
 
     if (!approved) {
       const outcome = { receiptId: receipt.receiptId, status: 'not_approved', dossierId: proposal.dossierId, action: proposal.action };
-      storeReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
+      db.putReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
       outcomes.push(outcome);
       continue;
     }
@@ -248,11 +192,11 @@ async function handleCommit(req, res) {
         action: proposal.action,
         result: effectResult,
       };
-      storeReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, true);
+      db.putReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, true);
       outcomes.push(outcome);
     } catch (err) {
       const outcome = { receiptId: receipt.receiptId, status: 'error', reason: err.message };
-      storeReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
+      db.putReceipt(receipt.receiptId, receipt.evaluationId, receipt.callId, outcome, false);
       outcomes.push(outcome);
     }
   }
