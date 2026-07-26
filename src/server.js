@@ -39,7 +39,7 @@ async function decideForDossier(dossier) {
   const finalAction = check.ok ? safePayload.action : 'request_confirmation';
 
   const proposal = {
-    dossierId: dossier.id,
+    dossierId: dossier.dossierId,
     callId,
     action: finalAction,
     payload: safePayload,
@@ -48,7 +48,7 @@ async function decideForDossier(dossier) {
   };
   proposal.proposalDigest = sha256Hex(canonicalStringify(proposal));
 
-  db.putDecision(contentHash, dossier.id, callId, proposal);
+  db.putDecision(contentHash, dossier.dossierId, callId, proposal);
   return { callId, proposal };
 }
 
@@ -81,7 +81,7 @@ async function handlePropose(req, res) {
   }
   const { evaluationId, dossiers } = parsed.data;
 
-  const ids = dossiers.map((d) => d.id);
+  const ids = dossiers.map((d) => d.dossierId);
   if (new Set(ids).size !== ids.length) {
     return jsonError(res, 400, 'duplicate dossier IDs in request');
   }
@@ -107,10 +107,11 @@ async function handlePropose(req, res) {
       proposals.push(proposal);
     }
 
-    // ASSUMPTION: storing an optional receipt-verification key the grader
-    // may send alongside the propose request (e.g. body.receiptVerificationKey).
-    // Confirm the real field name once you have the exact request example.
-    db.putEvaluation(evaluationId, dossierFingerprint, proposals, req.body.receiptVerificationKey || null, 'awaiting_receipts');
+    // CONFIRMED: the grader sends a real receiptVerifier object
+    // { algorithm: "Ed25519", publicKeyJwk: {...} } on every propose
+    // request. Store it with the evaluation so commit-time signature
+    // verification (still TODO below) can use it.
+    db.putEvaluation(evaluationId, dossierFingerprint, proposals, req.body.receiptVerifier || null, 'awaiting_receipts');
 
     return res.status(200).type('application/json').json({
       status: 'awaiting_receipts',
