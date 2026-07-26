@@ -73,8 +73,10 @@ app.post('/', async (req, res) => {
 });
 
 async function handlePropose(req, res) {
+  console.log('PROPOSE raw body:', JSON.stringify(req.body).slice(0, 3000));
   const parsed = ProposeRequestSchema.safeParse(req.body);
   if (!parsed.success) {
+    console.error('PROPOSE validation failed:', JSON.stringify(parsed.error.issues));
     return jsonError(res, 422, 'invalid propose request', parsed.error.issues);
   }
   const { evaluationId, dossiers } = parsed.data;
@@ -121,8 +123,10 @@ async function handlePropose(req, res) {
 }
 
 async function handleCommit(req, res) {
+  console.log('COMMIT raw body:', JSON.stringify(req.body).slice(0, 3000));
   const parsed = CommitRequestSchema.safeParse(req.body);
   if (!parsed.success) {
+    console.error('COMMIT validation failed:', JSON.stringify(parsed.error.issues));
     return jsonError(res, 422, 'invalid commit request', parsed.error.issues);
   }
   const { receipts } = parsed.data;
